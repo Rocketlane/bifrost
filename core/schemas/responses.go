@@ -1760,6 +1760,10 @@ const (
 	ResponsesInputMessageContentBlockTypeFile      ResponsesMessageContentBlockType = "input_file"
 	ResponsesInputMessageContentBlockTypeAudio     ResponsesMessageContentBlockType = "input_audio"
 	ResponsesInputMessageContentBlockTypeContainer ResponsesMessageContentBlockType = "input_container" // Anthropic-only: file staged into the code-execution container input dir
+	// ResponsesInputMessageContentBlockTypeToolReference is Anthropic-only: a
+	// tool_reference block inside a tool_result, naming a defer_loading tool
+	// whose schema Anthropic should now load (client-side tool search).
+	ResponsesInputMessageContentBlockTypeToolReference ResponsesMessageContentBlockType = "tool_reference"
 
 	ResponsesOutputMessageContentTypeText      ResponsesMessageContentBlockType = "output_text"
 	ResponsesOutputMessageContentTypeRefusal   ResponsesMessageContentBlockType = "refusal"
@@ -1785,6 +1789,7 @@ type ResponsesMessageContentBlock struct {
 	Type      ResponsesMessageContentBlockType `json:"type"`
 	FileID    *string                          `json:"file_id,omitempty"` // Reference to uploaded file
 	Text      *string                          `json:"text,omitempty"`
+	ToolName  *string                          `json:"tool_name,omitempty"` // tool_reference blocks: the deferred tool being referenced
 	Signature *string                          `json:"signature,omitempty"` // Signature of the content (for reasoning)
 	// EncryptedContent is required on reasoning content blocks during history replay.
 	// OpenAI returns it alongside summary_text blocks; it must be echoed back verbatim.

@@ -707,6 +707,35 @@ func TestDeepCopyResponsesMessagePreservesToolSearchFields(t *testing.T) {
 	}
 }
 
+// A client-side tool search answers with tool_reference parts whose only payload
+// is the deferred tool's name. Fallback attempts are built from a deep copy of
+// the request, so the name must survive the copy or the fallback provider never
+// loads the deferred schemas.
+func TestDeepCopyResponsesMessagePreservesToolReferenceName(t *testing.T) {
+	fcoType := ResponsesMessageTypeFunctionCallOutput
+	original := ResponsesMessage{
+		Type: &fcoType,
+		ResponsesToolMessage: &ResponsesToolMessage{
+			CallID: Ptr("toolu_search"),
+			Output: &ResponsesToolMessageOutputStruct{
+				ResponsesFunctionToolCallOutputBlocks: []ResponsesMessageContentBlock{
+					{Type: ResponsesInputMessageContentBlockTypeToolReference, ToolName: Ptr("mcp__x__get_tasks")},
+				},
+			},
+		},
+	}
+
+	copied := DeepCopyResponsesMessage(original)
+
+	blocks := copied.ResponsesToolMessage.Output.ResponsesFunctionToolCallOutputBlocks
+	if len(blocks) != 1 || blocks[0].ToolName == nil || *blocks[0].ToolName != "mcp__x__get_tasks" {
+		t.Fatalf("expected tool_reference name to survive copy, got %#v", blocks)
+	}
+	if blocks[0].ToolName == original.ResponsesToolMessage.Output.ResponsesFunctionToolCallOutputBlocks[0].ToolName {
+		t.Fatal("copied ToolName must not alias the original pointer")
+	}
+}
+
 // TestResponsesMessagePreservesAdditionalTools verifies that codex
 // `additional_tools` input items (sent for code-mode models such as
 // gpt-5.6-sol) round-trip byte-identically. These items carry a `tools` array

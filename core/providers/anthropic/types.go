@@ -1206,6 +1206,7 @@ const (
 	AnthropicContentBlockTypeBashCodeExecutionToolResult       AnthropicContentBlockType = "bash_code_execution_tool_result"
 	AnthropicContentBlockTypeTextEditorCodeExecutionToolResult AnthropicContentBlockType = "text_editor_code_execution_tool_result"
 	AnthropicContentBlockTypeToolSearchToolResult              AnthropicContentBlockType = "tool_search_tool_result"
+	AnthropicContentBlockTypeToolSearchToolSearchResult        AnthropicContentBlockType = "tool_search_tool_search_result"
 	AnthropicContentBlockTypeToolReference                     AnthropicContentBlockType = "tool_reference"
 	AnthropicContentBlockTypeContainerUpload                   AnthropicContentBlockType = "container_upload"
 	AnthropicContentBlockTypeAdvisorToolResult                 AnthropicContentBlockType = "advisor_tool_result"
@@ -1340,9 +1341,12 @@ type AnthropicContentBlock struct {
 // ToolReferences is declared flat, so live traffic never populates it:
 // AnthropicContent.UnmarshalJSON's single-object fallback parks the inner object in
 // Content.ContentBlocks, one level below where every reader was looking. Bifrost's
-// own rebuild (convertBifrostToolSearchCallToAnthropicBlocks) does set the flat
-// field, so both are honoured, flat first. The error variant
-// (tool_search_tool_result_error) legitimately carries none and yields nil.
+// own rebuild (convertBifrostToolSearchCallToAnthropicBlocks) matches the real wire
+// shape and nests too, via Content.ContentObj — the bare-object form MarshalJSON
+// needs to emit a single object rather than a one-element array. The flat field
+// is honoured only for any other producer that still hands this accessor a
+// flat-shaped block. The error variant (tool_search_tool_result_error)
+// legitimately carries none and yields nil.
 func (b *AnthropicContentBlock) DiscoveredToolReferences() []AnthropicContentBlock {
 	if b == nil {
 		return nil
@@ -1352,6 +1356,9 @@ func (b *AnthropicContentBlock) DiscoveredToolReferences() []AnthropicContentBlo
 	}
 	if b.Content == nil {
 		return nil
+	}
+	if b.Content.ContentObj != nil && len(b.Content.ContentObj.ToolReferences) > 0 {
+		return b.Content.ContentObj.ToolReferences
 	}
 	for _, inner := range b.Content.ContentBlocks {
 		if len(inner.ToolReferences) > 0 {

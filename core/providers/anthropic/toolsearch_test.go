@@ -315,9 +315,16 @@ func TestToolSearch_ReverseRebuildsAnthropicBlocks(t *testing.T) {
 	if resultBlock.ToolUseID == nil || *resultBlock.ToolUseID != tsServerToolUseID {
 		t.Fatalf("tool_search_tool_result tool_use_id = %v, want %q", resultBlock.ToolUseID, tsServerToolUseID)
 	}
-	if len(resultBlock.ToolReferences) != 1 || resultBlock.ToolReferences[0].ToolName == nil ||
-		*resultBlock.ToolReferences[0].ToolName != tsDiscoveredTool {
-		t.Fatalf("rebuilt tool_references = %+v, want one ref to %q", resultBlock.ToolReferences, tsDiscoveredTool)
+	// The rebuilt block must match the documented wire shape (tool_references
+	// nested inside a tool_search_tool_search_result "content" object), not the
+	// flat shape — Anthropic's own API rejects the flat shape when it is echoed
+	// back as conversation history on a later turn ("content: Field required").
+	if len(resultBlock.ToolReferences) != 0 {
+		t.Fatalf("rebuilt block has flat tool_references = %+v, want them nested under content (flat is not the real wire shape)", resultBlock.ToolReferences)
+	}
+	refs := resultBlock.DiscoveredToolReferences()
+	if len(refs) != 1 || refs[0].ToolName == nil || *refs[0].ToolName != tsDiscoveredTool {
+		t.Fatalf("rebuilt tool_references = %+v, want one ref to %q", refs, tsDiscoveredTool)
 	}
 }
 
@@ -389,8 +396,10 @@ func TestToolSearch_WireShapeCarriesToolReferences(t *testing.T) {
 }
 
 // TestToolSearch_FlatToolReferencesStillRead pins the other half of the accessor's
-// contract: Bifrost's own rebuild (convertBifrostToolSearchCallToAnthropicBlocks)
-// sets the flat field, so a block in that shape must keep working.
+// contract: some producer may still hand DiscoveredToolReferences a flat-shaped
+// block (Bifrost's own rebuild, convertBifrostToolSearchCallToAnthropicBlocks, no
+// longer does — it nests, matching the real wire shape), so a block in that shape
+// must keep working.
 func TestToolSearch_FlatToolReferencesStillRead(t *testing.T) {
 	t.Parallel()
 
@@ -713,4 +722,79 @@ func TestToolSearch_PreservesSearchQuery(t *testing.T) {
 		require.NotNil(t, serverToolUse)
 		assert.JSONEq(t, `{}`, string(serverToolUse.Input))
 	})
+}
+
+// TestToolSearch_ClientSideToolReferencesSurviveToolResultRoundTrip covers the
+// client-side variant of tool search (Claude Code / Agent SDK "ToolSearch"): the
+// client declares MCP tools with defer_loading:true, runs its own search, and
+// answers the search tool_use with a plain tool_result whose content is a list
+// of tool_reference blocks. Anthropic loads a deferred tool's schema only when
+// such a reference appears in the conversation, so if the proxy drops them the
+// model never sees any deferred schema — it reports "no schema is visible" and
+// has to guess arguments. Pins that the references survive the neutral form in
+// both directions, in order, alongside sibling text.
+func TestToolSearch_ClientSideToolReferencesSurviveToolResultRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := schemas.NewBifrostContextWithCancel(context.Background())
+	defer cancel()
+
+	const searchCallID = "toolu_clientsearch_1"
+	inbound := []AnthropicMessage{
+		{Role: AnthropicMessageRoleUser, Content: AnthropicContent{ContentStr: schemas.Ptr("list the tasks")}},
+		{Role: AnthropicMessageRoleAssistant, Content: AnthropicContent{ContentBlocks: []AnthropicContentBlock{
+			{Type: AnthropicContentBlockTypeToolUse, ID: schemas.Ptr(searchCallID), Name: schemas.Ptr("ToolSearch"), Input: json.RawMessage(`{"query":"tasks"}`)},
+		}}},
+		{Role: AnthropicMessageRoleUser, Content: AnthropicContent{ContentBlocks: []AnthropicContentBlock{
+			{Type: AnthropicContentBlockTypeToolResult, ToolUseID: schemas.Ptr(searchCallID), Content: &AnthropicContent{ContentBlocks: []AnthropicContentBlock{
+				{Type: AnthropicContentBlockTypeToolReference, ToolName: schemas.Ptr("mcp__x__get_tasks")},
+				{Type: AnthropicContentBlockTypeToolReference, ToolName: schemas.Ptr("mcp__x__get_projects")},
+			}}},
+			{Type: AnthropicContentBlockTypeText, Text: schemas.Ptr("Tool loaded.")},
+		}}},
+	}
+
+	neutral := ConvertAnthropicMessagesToBifrostMessages(ctx, inbound, nil, false, false)
+
+	// The neutral form must carry the references as typed parts, not drop them.
+	var out *schemas.ResponsesMessage
+	for i := range neutral {
+		if neutral[i].Type != nil && *neutral[i].Type == schemas.ResponsesMessageTypeFunctionCallOutput {
+			out = &neutral[i]
+		}
+	}
+	require.NotNil(t, out, "tool_result was not converted to a function_call_output")
+	require.NotNil(t, out.ResponsesToolMessage)
+	require.NotNil(t, out.ResponsesToolMessage.Output)
+	parts := out.ResponsesToolMessage.Output.ResponsesFunctionToolCallOutputBlocks
+	require.Len(t, parts, 2, "both tool_reference blocks must survive ingest")
+	for i, want := range []string{"mcp__x__get_tasks", "mcp__x__get_projects"} {
+		assert.Equal(t, schemas.ResponsesInputMessageContentBlockTypeToolReference, parts[i].Type)
+		require.NotNil(t, parts[i].ToolName)
+		assert.Equal(t, want, *parts[i].ToolName)
+	}
+
+	// And the rebuilt Anthropic request must present them to the API unchanged.
+	rebuilt, _ := ConvertBifrostMessagesToAnthropicMessages(ctx, neutral, true,
+		schemas.ResolveModelCaps(schemas.Anthropic, "claude-sonnet-4-5"))
+	var toolResult *AnthropicContentBlock
+	for mi := range rebuilt {
+		for bi := range rebuilt[mi].Content.ContentBlocks {
+			if b := &rebuilt[mi].Content.ContentBlocks[bi]; b.Type == AnthropicContentBlockTypeToolResult {
+				toolResult = b
+			}
+		}
+	}
+	require.NotNil(t, toolResult, "rebuilt request lost the tool_result block")
+	require.NotNil(t, toolResult.Content)
+	refs := toolResult.Content.ContentBlocks
+	require.Len(t, refs, 2, "rebuilt tool_result must carry both tool_reference blocks")
+	for i, want := range []string{"mcp__x__get_tasks", "mcp__x__get_projects"} {
+		assert.Equal(t, AnthropicContentBlockTypeToolReference, refs[i].Type)
+		require.NotNil(t, refs[i].ToolName)
+		assert.Equal(t, want, *refs[i].ToolName)
+	}
+	// Wire shape check: exactly what Anthropic documents for a tool_reference.
+	wire, err := json.Marshal(refs[0])
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"type":"tool_reference","tool_name":"mcp__x__get_tasks"}`, string(wire))
 }

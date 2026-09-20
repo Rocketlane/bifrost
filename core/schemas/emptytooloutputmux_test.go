@@ -99,3 +99,40 @@ func TestToChatMessages_NonEmptyToolOutputUnchanged(t *testing.T) {
 		t.Errorf("tool output altered: got %q", *cm.Content.ContentStr)
 	}
 }
+
+// A client-side tool search answers with Anthropic-only tool_reference parts.
+// On a Responses->Chat fallback those must be rendered as text (matching the
+// OpenAI Responses flatten), never forwarded as a "tool_reference" chat block.
+func TestToChatMessages_ToolOutputToolReferencesRenderAsText(t *testing.T) {
+	fcoType := ResponsesMessageTypeFunctionCallOutput
+
+	chatMessages := ToChatMessages([]ResponsesMessage{{
+		Type: &fcoType,
+		ResponsesToolMessage: &ResponsesToolMessage{
+			CallID: Ptr("toolu_search"),
+			Output: &ResponsesToolMessageOutputStruct{
+				ResponsesFunctionToolCallOutputBlocks: []ResponsesMessageContentBlock{
+					{Type: ResponsesInputMessageContentBlockTypeToolReference, ToolName: Ptr("mcp__x__get_tasks")},
+					{Type: ResponsesInputMessageContentBlockTypeText, Text: Ptr("Tool loaded.")},
+				},
+			},
+		},
+	}})
+
+	if len(chatMessages) != 1 {
+		t.Fatalf("expected 1 chat message, got %d", len(chatMessages))
+	}
+	cm := chatMessages[0]
+	if cm.Content == nil || len(cm.Content.ContentBlocks) != 2 {
+		t.Fatalf("expected 2 content blocks, got %+v", cm.Content)
+	}
+	for i, want := range []string{"tool_reference: mcp__x__get_tasks", "Tool loaded."} {
+		b := cm.Content.ContentBlocks[i]
+		if b.Type != ChatContentBlockTypeText {
+			t.Errorf("block %d type = %q, want %q", i, b.Type, ChatContentBlockTypeText)
+		}
+		if b.Text == nil || *b.Text != want {
+			t.Errorf("block %d text = %v, want %q", i, b.Text, want)
+		}
+	}
+}

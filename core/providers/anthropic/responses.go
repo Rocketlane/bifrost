@@ -6273,6 +6273,20 @@ func convertAnthropicContentBlocksToResponsesMessagesGrouped(contentBlocks []Ant
 							if contentBlock.Source != nil && contentBlock.Source.SourceObj != nil {
 								toolMsgContentBlocks = append(toolMsgContentBlocks, contentBlock.toBifrostResponsesDocumentBlock())
 							}
+						case AnthropicContentBlockTypeToolReference:
+							// A client-side tool search (Claude Code / Agent SDK
+							// "ToolSearch") answers with tool_reference blocks inside
+							// a plain tool_result. Anthropic loads a defer_loading
+							// tool's schema only when such a reference appears, so
+							// dropping these leaves every deferred tool permanently
+							// invisible to the model.
+							if contentBlock.ToolName != nil {
+								toolMsgContentBlocks = append(toolMsgContentBlocks, schemas.ResponsesMessageContentBlock{
+									Type:         schemas.ResponsesInputMessageContentBlockTypeToolReference,
+									ToolName:     contentBlock.ToolName,
+									CacheControl: contentBlock.CacheControl,
+								})
+							}
 						}
 					}
 					bifrostMsg.ResponsesToolMessage.Output.ResponsesFunctionToolCallOutputBlocks = toolMsgContentBlocks
@@ -6694,6 +6708,20 @@ func convertAnthropicContentBlocksToResponsesMessages(ctx *schemas.BifrostContex
 							// "Missing required parameter: 'input[N].content[0]'".
 							if contentBlock.Source != nil && contentBlock.Source.SourceObj != nil {
 								toolMsgContentBlocks = append(toolMsgContentBlocks, contentBlock.toBifrostResponsesDocumentBlock())
+							}
+						case AnthropicContentBlockTypeToolReference:
+							// A client-side tool search (Claude Code / Agent SDK
+							// "ToolSearch") answers with tool_reference blocks inside
+							// a plain tool_result. Anthropic loads a defer_loading
+							// tool's schema only when such a reference appears, so
+							// dropping these leaves every deferred tool permanently
+							// invisible to the model.
+							if contentBlock.ToolName != nil {
+								toolMsgContentBlocks = append(toolMsgContentBlocks, schemas.ResponsesMessageContentBlock{
+									Type:         schemas.ResponsesInputMessageContentBlockTypeToolReference,
+									ToolName:     contentBlock.ToolName,
+									CacheControl: contentBlock.CacheControl,
+								})
 							}
 						}
 					}
@@ -7766,6 +7794,12 @@ func convertBifrostToolSearchCallToAnthropicBlocks(msg *schemas.ResponsesMessage
 	}
 
 	// 2. tool_search_tool_result block reconstructed from the discovered tool names.
+	// Anthropic nests tool_references one level down inside a
+	// tool_search_tool_search_result "content" object, not flat on the result
+	// block itself — see AnthropicContentBlock.DiscoveredToolReferences for the
+	// documented wire shape. Building the flat shape here produces a block real
+	// Anthropic API traffic never sends, which the API itself then rejects when
+	// this block is echoed back on a later turn ("content: Field required").
 	var toolReferences []AnthropicContentBlock
 	if msg.ResponsesToolMessage.ResponsesToolSearchCall != nil {
 		for _, toolName := range msg.ResponsesToolMessage.ResponsesToolSearchCall.ToolReferences {
@@ -7776,9 +7810,14 @@ func convertBifrostToolSearchCallToAnthropicBlocks(msg *schemas.ResponsesMessage
 		}
 	}
 	resultBlock := AnthropicContentBlock{
-		Type:           AnthropicContentBlockTypeToolSearchToolResult,
-		ToolUseID:      toolUseID,
-		ToolReferences: toolReferences,
+		Type:      AnthropicContentBlockTypeToolSearchToolResult,
+		ToolUseID: toolUseID,
+		Content: &AnthropicContent{
+			ContentObj: &AnthropicContentBlock{
+				Type:           AnthropicContentBlockTypeToolSearchToolSearchResult,
+				ToolReferences: toolReferences,
+			},
+		},
 	}
 
 	return []AnthropicContentBlock{serverToolUseBlock, resultBlock}
@@ -8934,6 +8973,14 @@ func convertContentBlockToAnthropic(block schemas.ResponsesMessageContentBlock) 
 				block.Citations,
 			)
 			return &anthropicBlock
+		}
+	case schemas.ResponsesInputMessageContentBlockTypeToolReference:
+		if block.ToolName != nil {
+			return &AnthropicContentBlock{
+				Type:         AnthropicContentBlockTypeToolReference,
+				ToolName:     block.ToolName,
+				CacheControl: block.CacheControl,
+			}
 		}
 	case schemas.ResponsesInputMessageContentBlockTypeContainer:
 		if block.FileID != nil {

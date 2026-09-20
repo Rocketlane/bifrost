@@ -916,6 +916,7 @@ func ToChatMessages(rms []ResponsesMessage) []ChatMessage {
 				for i, block := range rm.Content.ContentBlocks {
 					// Map ResponsesMessageContentBlockType to ChatContentBlockType
 					var chatBlockType ChatContentBlockType
+					blockText := block.Text
 					switch block.Type {
 					case ResponsesInputMessageContentBlockTypeText:
 						chatBlockType = ChatContentBlockTypeText // "input_text" -> "text"
@@ -925,6 +926,16 @@ func ToChatMessages(rms []ResponsesMessage) []ChatMessage {
 						chatBlockType = ChatContentBlockTypeFile // "input_file" -> "file"
 					case ResponsesInputMessageContentBlockTypeAudio:
 						chatBlockType = ChatContentBlockTypeInputAudio // "input_audio" -> "input_audio" (same)
+					case ResponsesInputMessageContentBlockTypeToolReference:
+						// Anthropic-only deferred-tool reference (client-side tool
+						// search). Chat Completions has no equivalent, so render it as
+						// text — the same rendering the OpenAI Responses flatten uses —
+						// rather than forwarding a "tool_reference" block the chat
+						// provider would reject.
+						chatBlockType = ChatContentBlockTypeText
+						if block.ToolName != nil {
+							blockText = Ptr("tool_reference: " + *block.ToolName)
+						}
 					default:
 						// For unknown types, fall back to direct conversion
 						chatBlockType = ChatContentBlockType(block.Type)
@@ -932,7 +943,7 @@ func ToChatMessages(rms []ResponsesMessage) []ChatMessage {
 
 					chatBlocks[i] = ChatContentBlock{
 						Type: chatBlockType,
-						Text: block.Text,
+						Text: blockText,
 					}
 
 					// Convert specific block types

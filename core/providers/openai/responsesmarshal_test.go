@@ -684,6 +684,62 @@ func TestOpenAIResponsesRequestInput_MarshalJSON_FunctionCallOutputFlattensTextB
 	}
 }
 
+// Anthropic-only tool_reference parts (client-side tool search answering with
+// the deferred tools it found) have no OpenAI equivalent. On a cross-provider
+// fallback they must be rendered into the flattened output string rather than
+// forwarded as an unknown content type OpenAI would reject.
+func TestOpenAIResponsesRequestInput_MarshalJSON_FunctionCallOutputFlattensToolReferencesToText(t *testing.T) {
+	callID := "toolu_search_1"
+	input := &OpenAIResponsesRequestInput{
+		OpenAIResponsesRequestInputArray: []schemas.ResponsesMessage{
+			{
+				Type:   schemas.Ptr(schemas.ResponsesMessageTypeFunctionCall),
+				Status: schemas.Ptr("completed"),
+				ResponsesToolMessage: &schemas.ResponsesToolMessage{
+					CallID: schemas.Ptr(callID), Name: schemas.Ptr("ToolSearch"), Arguments: schemas.Ptr(`{"query":"tasks"}`),
+				},
+			},
+			{
+				Type:   schemas.Ptr(schemas.ResponsesMessageTypeFunctionCallOutput),
+				Status: schemas.Ptr("completed"),
+				ResponsesToolMessage: &schemas.ResponsesToolMessage{
+					CallID: schemas.Ptr(callID),
+					Output: &schemas.ResponsesToolMessageOutputStruct{
+						ResponsesFunctionToolCallOutputBlocks: []schemas.ResponsesMessageContentBlock{
+							{Type: schemas.ResponsesInputMessageContentBlockTypeToolReference, ToolName: schemas.Ptr("mcp__x__get_tasks")},
+							{Type: schemas.ResponsesInputMessageContentBlockTypeToolReference, ToolName: schemas.Ptr("mcp__x__get_projects")},
+							{Type: schemas.ResponsesInputMessageContentBlockTypeText, Text: schemas.Ptr("Tool loaded.")},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	jsonBytes, err := input.MarshalJSON()
+	if err != nil {
+		t.Fatalf("Failed to marshal OpenAIResponsesRequestInput: %v", err)
+	}
+	var messages []map[string]interface{}
+	if err := sonic.Unmarshal(jsonBytes, &messages); err != nil {
+		t.Fatalf("Failed to unmarshal marshaled input as array: %v\nraw=%s", err, string(jsonBytes))
+	}
+	var outputVal interface{}
+	for _, m := range messages {
+		if typ, ok := m["type"].(string); ok && typ == string(schemas.ResponsesMessageTypeFunctionCallOutput) {
+			outputVal = m["output"]
+		}
+	}
+	outputStr, isString := outputVal.(string)
+	if !isString {
+		t.Fatalf("function_call_output.output must be flattened to a string; got %T: %v\nraw=%s", outputVal, outputVal, string(jsonBytes))
+	}
+	want := "tool_reference: mcp__x__get_tasks\ntool_reference: mcp__x__get_projects\nTool loaded."
+	if outputStr != want {
+		t.Fatalf("function_call_output.output mismatch:\nwant %q\ngot  %q", want, outputStr)
+	}
+}
+
 // Flattening must concatenate multiple text blocks with newline separators so
 // every character from the upstream tool response reaches the model.
 func TestOpenAIResponsesRequestInput_MarshalJSON_FunctionCallOutputConcatenatesMultipleTextBlocks(t *testing.T) {

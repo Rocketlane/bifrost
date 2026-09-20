@@ -1527,6 +1527,14 @@ func deepCopyResponsesMessageContentBlock(original ResponsesMessageContentBlock)
 		copy.Text = &copyText
 	}
 
+	// tool_reference blocks (client-side tool search) carry only the deferred
+	// tool's name; egress drops the block without it, so a fallback attempt
+	// built from this copy would lose every reference.
+	if original.ToolName != nil {
+		copyToolName := *original.ToolName
+		copy.ToolName = &copyToolName
+	}
+
 	// Reasoning replay fields: Signature and EncryptedContent are echoed back
 	// verbatim to the provider, so they must survive the deep copy.
 	if original.Signature != nil {

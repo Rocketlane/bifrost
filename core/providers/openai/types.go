@@ -789,11 +789,18 @@ func isFunctionCallOutputBlocksFlattenable(blocks []schemas.ResponsesMessageCont
 		return false
 	}
 	for _, block := range blocks {
-		if block.Type != schemas.ResponsesInputMessageContentBlockTypeText &&
-			block.Type != schemas.ResponsesOutputMessageContentTypeText {
-			return false
-		}
-		if block.Text == nil {
+		switch block.Type {
+		case schemas.ResponsesInputMessageContentBlockTypeText, schemas.ResponsesOutputMessageContentTypeText:
+			if block.Text == nil {
+				return false
+			}
+		case schemas.ResponsesInputMessageContentBlockTypeToolReference:
+			// Anthropic-only deferred-tool reference; OpenAI has no equivalent,
+			// so it is rendered as text rather than forwarded as an unknown type.
+			if block.ToolName == nil {
+				return false
+			}
+		default:
 			return false
 		}
 	}
@@ -808,6 +815,10 @@ func flattenFunctionCallOutputBlocks(blocks []schemas.ResponsesMessageContentBlo
 	for i, block := range blocks {
 		if i > 0 {
 			b.WriteByte('\n')
+		}
+		if block.Type == schemas.ResponsesInputMessageContentBlockTypeToolReference && block.ToolName != nil {
+			b.WriteString("tool_reference: " + *block.ToolName)
+			continue
 		}
 		if block.Text != nil {
 			b.WriteString(*block.Text)
