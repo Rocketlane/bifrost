@@ -50,6 +50,7 @@ type TestScenarios struct {
 	Transcription                bool // Speech-to-text functionality
 	TranscriptionStream          bool // Streaming speech-to-text functionality
 	Embedding                    bool // Embedding functionality
+	MultimodalEmbedding          bool // Multimodal embedding functionality (text + image)
 	Reasoning                    bool // Reasoning/thinking functionality via Responses API
 	PromptCaching                bool // Prompt caching functionality
 	ListModels                   bool // List available models functionality
@@ -91,6 +92,8 @@ type TestScenarios struct {
 	ContainerFileDelete          bool // Container File API delete functionality
 	PassThroughExtraParams       bool // Pass through extra params functionality
 	Rerank                       bool // Rerank functionality
+	Decision                     bool // Decision functionality (annotated function-tool evaluation)
+	DecisionEmulation            bool // Decision emulated via a general LLM (tool-calling / structured output)
 	PassthroughAPI               bool // Raw HTTP passthrough API (Passthrough + PassthroughStream)
 	WebSocketResponses           bool // WebSocket Responses API mode
 	Realtime                     bool // Realtime API (bidirectional audio/text)
@@ -113,7 +116,10 @@ type ComprehensiveTestConfig struct {
 	VisionModel              string
 	ReasoningModel           string
 	EmbeddingModel           string
+	MultimodalEmbeddingModel string // Model for multimodal embedding tests (text + image)
 	RerankModel              string
+	DecisionModel            string
+	DecisionEmulationModel   string // a general LLM model used to emulate a decision
 	TranscriptionModel       string
 	SpeechSynthesisModel     string
 	ChatAudioModel           string
@@ -124,6 +130,7 @@ type ComprehensiveTestConfig struct {
 	SpeechSynthesisFallbacks []schemas.Fallback         // for speech synthesis tests
 	EmbeddingFallbacks       []schemas.Fallback         // for embedding tests
 	RerankFallbacks          []schemas.Fallback         // for rerank tests
+	DecisionFallbacks        []schemas.Fallback         // for decision tests
 	SkipReason               string                     // Reason to skip certain tests
 	ImageGenerationModel     string                     // Model for image generation
 	ImageGenerationFallbacks []schemas.Fallback         // Fallbacks for image generation
@@ -197,7 +204,9 @@ func (account *ComprehensiveTestAccount) GetConfiguredProviders() ([]schemas.Mod
 		schemas.Sarvam,
 		schemas.Wafer,
 		schemas.Databricks,
+		schemas.Cloudflare,
 		schemas.GithubCopilot,
+		schemas.Typesafe,
 		ProviderOpenAICustom,
 	}, nil
 }
@@ -380,7 +389,17 @@ func (account *ComprehensiveTestAccount) GetKeysForProvider(ctx context.Context,
 		return []schemas.Key{
 			{
 				Value:  *schemas.NewSecretVar("env.VERTEX_API_KEY"),
-				Models: []string{"text-multilingual-embedding-002", "gemini-2.5-pro", "gemini-2.5-flash-image", "imagen-4.0-generate-001", "semantic-ranker-default@latest", "semantic-ranker-default-004"},
+				Models: []string{"text-multilingual-embedding-002", "gemini-2.5-pro", "gemini-2.5-flash-image", "imagen-4.0-generate-001", "semantic-ranker-default@latest", "semantic-ranker-default-004", "multimodalembedding@001"},
+				Weight: 1.0,
+				VertexKeyConfig: &schemas.VertexKeyConfig{
+					ProjectID:       *schemas.NewSecretVar("env.VERTEX_PROJECT_ID"),
+					Region:          *schemas.NewSecretVar(getEnvWithDefault("VERTEX_REGION", "us-central1")),
+					AuthCredentials: *schemas.NewSecretVar("env.VERTEX_CREDENTIALS"),
+				},
+				UseForBatchAPI: bifrost.Ptr(true),
+			},
+			{
+				Models: []string{"gemini-embedding-2-preview"},
 				Weight: 1.0,
 				VertexKeyConfig: &schemas.VertexKeyConfig{
 					ProjectID:       *schemas.NewSecretVar("env.VERTEX_PROJECT_ID"),
@@ -513,6 +532,18 @@ func (account *ComprehensiveTestAccount) GetKeysForProvider(ctx context.Context,
 				UseForBatchAPI: bifrost.Ptr(true),
 			},
 		}, nil
+	case schemas.Cloudflare:
+		return []schemas.Key{
+			{
+				Value:  *schemas.NewSecretVar("env.CLOUDFLARE_API_TOKEN"),
+				Models: []string{"*"},
+				Weight: 1.0,
+				CloudflareKeyConfig: &schemas.CloudflareKeyConfig{
+					AccountID: *schemas.NewSecretVar("env.CLOUDFLARE_ACCOUNT_ID"),
+				},
+				UseForBatchAPI: bifrost.Ptr(true),
+			},
+		}, nil
 	case schemas.GithubCopilot:
 		// Server-to-server auth: the credential is the GitHub App bundle, not a key value.
 		// GITHUB_COPILOT_API_KEY is the alternative direct-token mode and is left unset here.
@@ -592,6 +623,14 @@ func (account *ComprehensiveTestAccount) GetKeysForProvider(ctx context.Context,
 				Models:         []string{"*"},
 				Weight:         1.0,
 				UseForBatchAPI: bifrost.Ptr(true),
+			},
+		}, nil
+	case schemas.Typesafe:
+		return []schemas.Key{
+			{
+				Value:  *schemas.NewSecretVar("env.TYPESAFE_API_KEY"),
+				Models: []string{"*"},
+				Weight: 1.0,
 			},
 		}, nil
 	case schemas.Fireworks:
@@ -933,6 +972,19 @@ func (account *ComprehensiveTestAccount) GetConfigForProvider(providerKey schema
 				BufferSize:  10,
 			},
 		}, nil
+	case schemas.Cloudflare:
+		return &schemas.ProviderConfig{
+			NetworkConfig: schemas.NetworkConfig{
+				DefaultRequestTimeoutInSeconds: 120,
+				MaxRetries:                     10,
+				RetryBackoffInitial:            5 * time.Second,
+				RetryBackoffMax:                3 * time.Minute,
+			},
+			ConcurrencyAndBufferSize: schemas.ConcurrencyAndBufferSize{
+				Concurrency: Concurrency,
+				BufferSize:  10,
+			},
+		}, nil
 	case schemas.GithubCopilot:
 		return &schemas.ProviderConfig{
 			NetworkConfig: schemas.NetworkConfig{
@@ -1052,6 +1104,19 @@ func (account *ComprehensiveTestAccount) GetConfigForProvider(providerKey schema
 			},
 		}, nil
 	case schemas.Runware:
+		return &schemas.ProviderConfig{
+			NetworkConfig: schemas.NetworkConfig{
+				DefaultRequestTimeoutInSeconds: 300,
+				MaxRetries:                     10,
+				RetryBackoffInitial:            1 * time.Second,
+				RetryBackoffMax:                12 * time.Second,
+			},
+			ConcurrencyAndBufferSize: schemas.ConcurrencyAndBufferSize{
+				Concurrency: Concurrency,
+				BufferSize:  10,
+			},
+		}, nil
+	case schemas.Typesafe:
 		return &schemas.ProviderConfig{
 			NetworkConfig: schemas.NetworkConfig{
 				DefaultRequestTimeoutInSeconds: 300,
