@@ -3,6 +3,7 @@ package openai_test
 import (
 	"testing"
 
+	"github.com/maximhq/bifrost/core/providers/cohere"
 	"github.com/maximhq/bifrost/core/providers/openai"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/stretchr/testify/require"
@@ -60,4 +61,74 @@ func TestToOpenAIEmbeddingRequestSendsOnlyOpenAIParams(t *testing.T) {
 	body, err := schemas.MarshalSorted(req)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"model":"mistral-embed","input":"hello","encoding_format":"float","dimensions":8}`, string(body))
+}
+
+func TestToOpenAIEmbeddingRequestTextInputShape(t *testing.T) {
+	for _, provider := range []schemas.ModelProvider{schemas.Azure, schemas.OpenAI, schemas.Mistral} {
+		for _, texts := range [][]string{{"hello"}, {"hello", "world"}} {
+			t.Run(string(provider)+"/"+texts[len(texts)-1], func(t *testing.T) {
+				src := &openai.OpenAIEmbeddingRequest{
+					Model: string(provider) + "/embed-model",
+					Input: &openai.OpenAIEmbeddingInput{Texts: texts},
+				}
+				req, err := openai.ToOpenAIEmbeddingRequest(src.ToBifrostEmbeddingRequest(nil), provider)
+				require.NoError(t, err)
+				body, err := schemas.MarshalSorted(req)
+				require.NoError(t, err)
+				want := `{"model":"embed-model","input":["hello","world"]}`
+				if len(texts) == 1 {
+					want = `{"model":"embed-model","input":"hello"}`
+					if provider == schemas.Azure {
+						want = `{"model":"embed-model","input":["hello"]}`
+					}
+				}
+				require.JSONEq(t, want, string(body))
+			})
+		}
+	}
+}
+
+func TestCohereEmbeddingRequestToAzureKeepsSingleTextArray(t *testing.T) {
+	src := &cohere.CohereEmbeddingRequest{Model: "azure/embed-v-4-0", Texts: []string{"hello"}}
+	normalized, err := src.ToBifrostEmbeddingRequest(nil)
+	require.NoError(t, err)
+	req, err := openai.ToOpenAIEmbeddingRequest(normalized, schemas.Azure)
+	require.NoError(t, err)
+	body, err := schemas.MarshalSorted(req)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"embed-v-4-0","input":["hello"]}`, string(body))
+}
+
+func TestToOpenAIEmbeddingRequestAzureTokenInputShape(t *testing.T) {
+	for _, input := range []*openai.OpenAIEmbeddingInput{
+		{Embedding: []int{1, 2}},
+		{Embeddings: [][]int{{1, 2}, {3, 4}}},
+	} {
+		src := &openai.OpenAIEmbeddingRequest{Model: "azure/embed-model", Input: input}
+		req, err := openai.ToOpenAIEmbeddingRequest(src.ToBifrostEmbeddingRequest(nil), schemas.Azure)
+		require.NoError(t, err)
+		want, err := schemas.MarshalSorted(input)
+		require.NoError(t, err)
+		got, err := schemas.MarshalSorted(req.Input)
+		require.NoError(t, err)
+		require.JSONEq(t, string(want), string(got))
+	}
+}
+
+func BenchmarkToOpenAIEmbeddingRequestSingleText(b *testing.B) {
+	for _, provider := range []schemas.ModelProvider{schemas.Azure, schemas.OpenAI} {
+		b.Run(string(provider), func(b *testing.B) {
+			req := &schemas.BifrostEmbeddingRequest{
+				Provider: provider,
+				Model:    "embed-model",
+				Input:    []schemas.EmbeddingInputItem{{Content: schemas.EmbeddingContent{{Type: schemas.EmbeddingContentPartTypeText, Text: new("hello")}}}},
+			}
+			for b.Loop() {
+				_, err := openai.ToOpenAIEmbeddingRequest(req, provider)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }

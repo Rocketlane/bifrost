@@ -101,9 +101,10 @@ func ToOpenAIEmbeddingRequest(bifrostReq *schemas.BifrostEmbeddingRequest, provi
 			return nil, providerUtils.InvalidRequestErrorf("this provider does not support mixing text and token embedding inputs in the same request")
 		}
 		switch {
-		case len(texts) == 1:
+		// Azure AI Foundry Cohere deployments require an array, even for one text.
+		case len(texts) == 1 && providerName != schemas.Azure:
 			input = &OpenAIEmbeddingInput{Text: &texts[0]}
-		case len(texts) > 1:
+		case len(texts) > 0:
 			input = &OpenAIEmbeddingInput{Texts: texts}
 		case len(tokenBatches) == 1:
 			input = &OpenAIEmbeddingInput{Embedding: tokenBatches[0]}

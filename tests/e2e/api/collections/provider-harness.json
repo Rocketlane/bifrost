@@ -259214,6 +259214,228 @@
           "response": []
         }
       ]
+    },
+    {
+      "name": "222. Azure single-text embedding arrays (azure-embedding-array)",
+      "description": "Requires an Azure provider key pointing at a Foundry resource with the Cohere Embed v4 deployment embed-v-4-0 (the deployment alias used by Synapse). The shared OpenAI converter previously collapsed a single text to a scalar and Azure Cohere returned 422 invalid input error. Native and OpenAI drop-in cases assert the actual egress input array as well as successful vectors; the Cohere drop-in pins texts[] normalization; the batch case preserves ordering and vector count. There are no error-status skips. Chat, Responses, Anthropic and audio routes do not accept embedding requests and are unaffected. Other providers retain their existing single-text encoding.",
+      "item": [
+        {
+          "name": "222.1 azure/embed-v-4-0 /v1/embeddings - single text stays an array",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-bf-send-back-raw-request",
+                "value": "true"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"azure/embed-v-4-0\",\n  \"input\": [\n    \"hello\"\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/embeddings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "embeddings"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var text = pm.response.text();",
+                  "pm.test('Azure embedding succeeds', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + text).to.eql(200);",
+                  "});",
+                  "var j = pm.response.json();",
+                  "pm.test('expected number of non-empty float vectors', function () {",
+                  "  var vectors = (j.data || []).map(function (d) { return d.embedding; });",
+                  "  pm.expect(vectors.length, text).to.eql(1);",
+                  "  vectors.forEach(function (v) { pm.expect(v, text).to.be.an('array'); pm.expect(v.length, text).to.be.above(0); });",
+                  "});",
+                  "pm.test('Azure egress input stays a text array', function () {",
+                  "  var rr = (j.extra_fields || {}).raw_request;",
+                  "  pm.expect(rr, 'raw_request missing: ' + text).to.not.be.undefined;",
+                  "  if (typeof rr === 'string') rr = JSON.parse(rr);",
+                  "  pm.expect(rr.input, text).to.deep.equal([\"hello\"]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "222.2 azure/embed-v-4-0 /openai/v1/embeddings - single text stays an array",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-bf-send-back-raw-request",
+                "value": "true"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"azure/embed-v-4-0\",\n  \"input\": [\n    \"hello\"\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/openai/v1/embeddings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openai",
+                "v1",
+                "embeddings"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var text = pm.response.text();",
+                  "pm.test('Azure embedding succeeds', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + text).to.eql(200);",
+                  "});",
+                  "var j = pm.response.json();",
+                  "pm.test('expected number of non-empty float vectors', function () {",
+                  "  var vectors = (j.data || []).map(function (d) { return d.embedding; });",
+                  "  pm.expect(vectors.length, text).to.eql(1);",
+                  "  vectors.forEach(function (v) { pm.expect(v, text).to.be.an('array'); pm.expect(v.length, text).to.be.above(0); });",
+                  "});",
+                  "pm.test('Azure egress input stays a text array', function () {",
+                  "  var rr = (j.extra_fields || {}).raw_request;",
+                  "  pm.expect(rr, 'raw_request missing: ' + text).to.not.be.undefined;",
+                  "  if (typeof rr === 'string') rr = JSON.parse(rr);",
+                  "  pm.expect(rr.input, text).to.deep.equal([\"hello\"]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "222.3 azure/embed-v-4-0 /cohere/v2/embed - single text stays an array",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"azure/embed-v-4-0\",\n  \"texts\": [\n    \"hello\"\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cohere/v2/embed",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cohere",
+                "v2",
+                "embed"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var text = pm.response.text();",
+                  "pm.test('Azure embedding succeeds', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + text).to.eql(200);",
+                  "});",
+                  "var j = pm.response.json();",
+                  "pm.test('expected number of non-empty float vectors', function () {",
+                  "  var vectors = (j.embeddings || {}).float || [];",
+                  "  pm.expect(vectors.length, text).to.eql(1);",
+                  "  vectors.forEach(function (v) { pm.expect(v, text).to.be.an('array'); pm.expect(v.length, text).to.be.above(0); });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "222.4 azure/embed-v-4-0 /v1/embeddings - batch text stays an array",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-bf-send-back-raw-request",
+                "value": "true"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"azure/embed-v-4-0\",\n  \"input\": [\n    \"hello\",\n    \"world\"\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/embeddings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "embeddings"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var text = pm.response.text();",
+                  "pm.test('Azure embedding succeeds', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + text).to.eql(200);",
+                  "});",
+                  "var j = pm.response.json();",
+                  "pm.test('expected number of non-empty float vectors', function () {",
+                  "  var vectors = (j.data || []).map(function (d) { return d.embedding; });",
+                  "  pm.expect(vectors.length, text).to.eql(2);",
+                  "  vectors.forEach(function (v) { pm.expect(v, text).to.be.an('array'); pm.expect(v.length, text).to.be.above(0); });",
+                  "});",
+                  "pm.test('Azure egress input stays a text array', function () {",
+                  "  var rr = (j.extra_fields || {}).raw_request;",
+                  "  pm.expect(rr, 'raw_request missing: ' + text).to.not.be.undefined;",
+                  "  if (typeof rr === 'string') rr = JSON.parse(rr);",
+                  "  pm.expect(rr.input, text).to.deep.equal([\"hello\", \"world\"]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }
