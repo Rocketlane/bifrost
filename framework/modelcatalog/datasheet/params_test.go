@@ -3,7 +3,10 @@ package datasheet
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -221,5 +224,114 @@ func TestLoadModelCapabilities_CarriesServerSideModel(t *testing.T) {
 	}
 	if caps == nil || caps.ServerSideModel == nil || *caps.ServerSideModel != "deepseek-flash" {
 		t.Fatalf("ServerSideModel = %+v, want deepseek-flash", caps)
+	}
+}
+
+func TestLoadModelCapabilitiesWithoutConfigStore(t *testing.T) {
+	const model = "claude-haiku-5-5"
+	path := filepath.Join(t.TempDir(), "parameters.json")
+	raw := []byte(`{"claude-haiku-5-5":{"provider":"anthropic","mode":"chat","supports_adaptive_thinking":true,"supports_native_effort":true,"supports_sampling_params":false},"azure/claude-haiku-5-5":{"provider":"azure","mode":"chat","supports_adaptive_thinking":false}}`)
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	s := New(nil, nil, Config{ModelParametersURL: "file://" + path})
+	if err := s.LoadModelParamsFromURLIntoMemory(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	caps, err := s.LoadModelCapabilities(t.Context(), schemas.Anthropic, model)
+	if err != nil || caps == nil {
+		t.Fatalf("downloaded capabilities unavailable without a config store: caps=%+v err=%v", caps, err)
+	}
+	if caps.SupportsAdaptiveThinking == nil || !*caps.SupportsAdaptiveThinking || caps.SupportsNativeEffort == nil || !*caps.SupportsNativeEffort {
+		t.Fatalf("Haiku flags lost: %+v", caps)
+	}
+	if caps.SupportsSamplingParams == nil || *caps.SupportsSamplingParams {
+		t.Fatalf("explicit false lost: %+v", caps)
+	}
+	*caps.SupportsAdaptiveThinking = false
+	again, err := s.LoadModelCapabilities(t.Context(), schemas.Anthropic, model)
+	if err != nil || again == nil || again.SupportsAdaptiveThinking == nil || !*again.SupportsAdaptiveThinking {
+		t.Fatalf("caller mutated the snapshot: %+v err=%v", again, err)
+	}
+	azure, err := s.LoadModelCapabilities(t.Context(), schemas.Azure, model)
+	if err != nil || azure == nil || azure.SupportsAdaptiveThinking == nil || *azure.SupportsAdaptiveThinking {
+		t.Fatalf("provider-qualified Azure row did not resolve independently: %+v err=%v", azure, err)
+	}
+	missing, err := s.LoadModelCapabilities(t.Context(), schemas.OpenAI, model)
+	if err != nil || missing != nil {
+		t.Fatalf("cross-provider capability leak: %+v err=%v", missing, err)
+	}
+
+	// Malformed and empty refreshes keep the previous usable snapshot.
+	for _, feed := range []map[string]json.RawMessage{{model: json.RawMessage(`{`)}, {model: json.RawMessage(`{}`)}} {
+		if s.applyModelParameters(feed) != 0 {
+			t.Fatal("unusable refresh applied")
+		}
+		kept, err := s.LoadModelCapabilities(t.Context(), schemas.Anthropic, model)
+		if err != nil || kept == nil || kept.SupportsAdaptiveThinking == nil || !*kept.SupportsAdaptiveThinking {
+			t.Fatalf("last-known-good capabilities lost: %+v err=%v", kept, err)
+		}
+	}
+	next := map[string]json.RawMessage{model: json.RawMessage(`{"provider":"anthropic","mode":"chat","supports_adaptive_thinking":false}`)}
+	if s.applyModelParameters(next) != 1 {
+		t.Fatal("refresh did not apply")
+	}
+	refreshed, err := s.LoadModelCapabilities(t.Context(), schemas.Anthropic, model)
+	if err != nil || refreshed == nil || refreshed.SupportsAdaptiveThinking == nil || *refreshed.SupportsAdaptiveThinking {
+		t.Fatalf("refresh did not replace capabilities: %+v err=%v", refreshed, err)
+	}
+	if removed, err := s.LoadModelCapabilities(t.Context(), schemas.Azure, model); err != nil || removed != nil {
+		t.Fatalf("removed row survived refresh: %+v err=%v", removed, err)
+	}
+	// The caller retains ownership of the input byte buffers.
+	for i := range next[model] {
+		next[model][i] = ' '
+	}
+	if intact, err := s.LoadModelCapabilities(t.Context(), schemas.Anthropic, model); err != nil || intact == nil {
+		t.Fatalf("input mutation damaged the snapshot: %+v err=%v", intact, err)
+	}
+}
+
+func TestStatelessCapabilitiesConcurrentRefresh(t *testing.T) {
+	s := New(nil, nil, Config{})
+	feed := map[string]json.RawMessage{"model": json.RawMessage(`{"provider":"anthropic","mode":"chat","supports_adaptive_thinking":true}`)}
+	s.applyModelParameters(feed)
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for range 100 {
+				caps, err := s.LoadModelCapabilities(t.Context(), schemas.Anthropic, "model")
+				if err != nil || caps == nil {
+					t.Errorf("concurrent lookup lost capabilities: %+v err=%v", caps, err)
+					return
+				}
+			}
+		})
+	}
+	for range 100 {
+		s.applyModelParameters(feed)
+	}
+	wg.Wait()
+}
+
+func BenchmarkLoadModelCapabilities(b *testing.B) {
+	for _, persisted := range []bool{false, true} {
+		name := "stateless"
+		if persisted {
+			name = "database"
+		}
+		b.Run(name, func(b *testing.B) {
+			const raw = `{"provider":"anthropic","mode":"chat","supports_adaptive_thinking":true,"supports_native_effort":true,"supports_sampling_params":false}`
+			s := New(nil, nil, Config{})
+			if persisted {
+				s.configStore = paramsOnlyConfigStore{rows: map[string]string{"claude-haiku-5-5": raw}}
+			}
+			s.applyModelParameters(map[string]json.RawMessage{"claude-haiku-5-5": json.RawMessage(raw)})
+			for b.Loop() {
+				if _, err := s.LoadModelCapabilities(b.Context(), schemas.Anthropic, "claude-haiku-5-5"); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

@@ -282336,6 +282336,140 @@
           ]
         }
       ]
+    },
+    {
+      "name": "274. Stateless Haiku 5.5 adaptive thinking (stateless-haiku-adaptive)",
+      "description": "Run with config_store.enabled=false and a current model-parameters datasheet. Database-free catalog startup must retain downloaded capabilities: otherwise Haiku 5.5 adaptive thinking is rebuilt as enabled+budget_tokens and effort is stripped, producing HTTP 400. Pins native Anthropic, Chat, Responses, and streamed Anthropic request paths. Database-backed profiles already pass these requests before the fix. Unit tests cover URL loading, provider isolation, snapshot ownership, refresh, and concurrent reads.",
+      "item": [
+        {
+          "name": "Anthropic adaptive - anthropic/claude-haiku-5-5 stateless-haiku-adaptive",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"anthropic/claude-haiku-5-5\",\n  \"max_tokens\": 2048,\n  \"thinking\": {\n    \"type\": \"adaptive\"\n  },\n  \"output_config\": {\n    \"effort\": \"medium\"\n  },\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Reply with the single word OK.\"\n    }\n  ]\n}"
+            },
+            "url": "{{baseUrl}}/anthropic/v1/messages"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var text = pm.response.text();",
+                  "pm.test('Haiku adaptive request succeeds', function () { pm.expect(pm.response.code, text).to.eql(200); });",
+                  "pm.test('legacy enabled thinking is absent', function () { pm.expect(text).to.not.include('thinking.type.enabled'); });",
+                  "pm.test('response has content', function () { var body = pm.response.json(); pm.expect(body.content || body.choices || body.output, text).to.be.an('array').that.is.not.empty; });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Chat reasoning effort - anthropic/claude-haiku-5-5 stateless-haiku-adaptive",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"anthropic/claude-haiku-5-5\",\n  \"max_tokens\": 2048,\n  \"reasoning\": {\n    \"effort\": \"medium\"\n  },\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Reply with the single word OK.\"\n    }\n  ]\n}"
+            },
+            "url": "{{baseUrl}}/v1/chat/completions"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var text = pm.response.text();",
+                  "pm.test('Haiku adaptive request succeeds', function () { pm.expect(pm.response.code, text).to.eql(200); });",
+                  "pm.test('legacy enabled thinking is absent', function () { pm.expect(text).to.not.include('thinking.type.enabled'); });",
+                  "pm.test('response has content', function () { var body = pm.response.json(); pm.expect(body.content || body.choices || body.output, text).to.be.an('array').that.is.not.empty; });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Responses reasoning effort - anthropic/claude-haiku-5-5 stateless-haiku-adaptive",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"anthropic/claude-haiku-5-5\",\n  \"max_output_tokens\": 2048,\n  \"reasoning\": {\n    \"effort\": \"medium\"\n  },\n  \"input\": \"Reply with the single word OK.\"\n}"
+            },
+            "url": "{{baseUrl}}/v1/responses"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var text = pm.response.text();",
+                  "pm.test('Haiku adaptive request succeeds', function () { pm.expect(pm.response.code, text).to.eql(200); });",
+                  "pm.test('legacy enabled thinking is absent', function () { pm.expect(text).to.not.include('thinking.type.enabled'); });",
+                  "pm.test('response has content', function () { var body = pm.response.json(); pm.expect(body.content || body.choices || body.output, text).to.be.an('array').that.is.not.empty; });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Anthropic adaptive stream - anthropic/claude-haiku-5-5 stateless-haiku-adaptive",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"anthropic/claude-haiku-5-5\",\n  \"max_tokens\": 2048,\n  \"thinking\": {\n    \"type\": \"adaptive\"\n  },\n  \"output_config\": {\n    \"effort\": \"medium\"\n  },\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Reply with the single word OK.\"\n    }\n  ],\n  \"stream\": true\n}"
+            },
+            "url": "{{baseUrl}}/anthropic/v1/messages"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var text = pm.response.text();",
+                  "pm.test('Haiku adaptive request succeeds', function () { pm.expect(pm.response.code, text).to.eql(200); });",
+                  "pm.test('legacy enabled thinking is absent', function () { pm.expect(text).to.not.include('thinking.type.enabled'); });",
+                  "pm.test('stream completes', function () { pm.expect(text).to.include('message_stop'); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
     }
   ]
 }

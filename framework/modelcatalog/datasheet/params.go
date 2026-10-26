@@ -180,6 +180,10 @@ func (s *Store) loadModelParametersFromURL(ctx context.Context) (map[string]json
 func (s *Store) applyModelParameters(paramsData map[string]json.RawMessage) int {
 	newResponseTypes := make(map[string][]string, len(paramsData))
 	newParamsIndex := make(map[string][]string, len(paramsData))
+	var newModelParameters map[string]string
+	if s.configStore == nil {
+		newModelParameters = make(map[string]string, len(paramsData))
+	}
 	applied := 0
 
 	for model, rawData := range paramsData {
@@ -198,6 +202,9 @@ func (s *Store) applyModelParameters(paramsData map[string]json.RawMessage) int 
 		// feed of empty rows clear the capability cache with nothing to refill it.
 		if !IsEmptyModelCapabilities(&caps) {
 			applied++
+			if newModelParameters != nil {
+				newModelParameters[model] = string(rawData)
+			}
 		}
 
 		outputs := make([]string, 0, len(caps.SupportedEndpoints))
@@ -254,6 +261,7 @@ func (s *Store) applyModelParameters(paramsData map[string]json.RawMessage) int 
 	s.mu.Lock()
 	s.supportedResponseTypes = newResponseTypes
 	s.supportedParams = newParamsIndex
+	s.modelParameters = newModelParameters
 	s.mu.Unlock()
 
 	// Anything cached against the previous sheet — records and "no such model"
@@ -273,8 +281,8 @@ func (s *Store) SetOnModelParametersApplied(fn func()) {
 }
 
 // LoadModelCapabilities resolves a runtime (provider, model) pair to its
-// capability record by reading datasheet rows out of the DB. It is the loader
-// behind the provider-utils capability cache, and it owns the key translation
+// capability record from the DB, or the last usable URL snapshot when no DB is
+// configured. It backs the provider-utils capability cache and owns the key translation
 // that cache deliberately knows nothing about: the datasheet keys rows by a raw,
 // often provider-prefixed name ("azure/gpt-5.1-chat") while callers ask by bare
 // model plus provider.
@@ -287,29 +295,39 @@ func (s *Store) SetOnModelParametersApplied(fn func()) {
 // store failure returns an error instead, which keeps the caller from caching
 // "no capabilities" for a model whose row exists but was unreachable.
 func (s *Store) LoadModelCapabilities(ctx context.Context, provider schemas.ModelProvider, model string) (*schemas.ModelCapabilities, error) {
-	if s.configStore == nil || model == "" {
+	if model == "" {
 		return nil, nil
 	}
 	candidates := s.modelParameterCandidates(model)
 	for _, candidate := range candidates {
-		row, err := s.configStore.GetModelParametersByModel(ctx, candidate)
-		if err != nil {
-			if errors.Is(err, configstore.ErrNotFound) {
-				continue
+		var data string
+		if s.configStore == nil {
+			s.mu.RLock()
+			data = s.modelParameters[candidate]
+			s.mu.RUnlock()
+		} else {
+			row, err := s.configStore.GetModelParametersByModel(ctx, candidate)
+			if err != nil {
+				if errors.Is(err, configstore.ErrNotFound) {
+					continue
+				}
+				return nil, fmt.Errorf("load capabilities for %s/%s: %w", provider, candidate, err)
 			}
-			return nil, fmt.Errorf("load capabilities for %s/%s: %w", provider, candidate, err)
+			if row != nil {
+				data = row.Data
+			}
 		}
-		if row == nil {
+		if len(data) == 0 {
 			continue
 		}
-		rowProvider := gjson.Get(row.Data, "provider").String()
+		rowProvider := gjson.Get(data, "provider").String()
 		// Exact match first: normalizeProvider folds every row that contains
 		// "bedrock" (like "bedrock_mantle") onto "bedrock".
 		if rowProvider == "" || (rowProvider != string(provider) && normalizeProvider(rowProvider) != string(provider)) {
 			continue
 		}
 		var caps schemas.ModelCapabilities
-		if err := json.Unmarshal([]byte(row.Data), &caps); err != nil || IsEmptyModelCapabilities(&caps) {
+		if err := json.Unmarshal([]byte(data), &caps); err != nil || IsEmptyModelCapabilities(&caps) {
 			continue
 		}
 		return &caps, nil
